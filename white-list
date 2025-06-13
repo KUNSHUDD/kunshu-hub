@@ -1,6 +1,6 @@
 local whitelist = {
-    ["hua503298957"] = true,  -- 玩家1在白名单
-    ["Player2"] = true,  -- 玩家2在白名单
-    ["XiaoYunCN"] = true, -- 假设这是允许的用户
-    -- 可以继续添加更多玩家
+    ["hua503298957"] = true,  
+    ["Player2"] = true,  
+    ["XiaoYunCN"] = true, 
+  
 }
