@@ -1,314 +1,600 @@
 <#
 .SYNOPSIS
-PowerShell 增强浏览器 - 支持搜索、专属网站和服务器位置检测
+PowerShell 控制台浏览器 - 提供完整的网页浏览体验
 
 .DESCRIPTION
-功能列表:
-1. 网络搜索并选择结果
-2. 专属网站收藏区管理
-3. 关键词优先匹配网站
-4. 境外服务器访问警告
-5. GitHub账号集成
-6. 纯控制台操作界面
+功能特点:
+1. 专业启动界面和初始化过程
+2. 网页浏览与渲染（文本模式）
+3. 书签管理
+4. 历史记录
+5. 多标签支持
+6. 页面内搜索
+7. 服务器位置检测
+8. 响应式用户界面
 
 .NOTES
+版本: 3.0
 作者: 您的名字
-版本: 2.0
-GitHub: 在此输入您的GitHub账号
+日期: 2023-12-01
 #>
 
+# 浏览器名称和版本
+$browserName = "PowerShell Browser"
+$version = "3.0"
+
 # 配置文件路径
-$configPath = "$env:APPDATA\PSBrowserConfig.xml"
+$configDir = "$env:APPDATA\PSBrowser"
+$configPath = "$configDir\config.xml"
+$bookmarksPath = "$configDir\bookmarks.xml"
+$historyPath = "$configDir\history.xml"
+
+# 创建配置目录
+if (-not (Test-Path $configDir)) { 
+    New-Item -ItemType Directory -Path $configDir | Out-Null 
+}
 
 # 初始化配置
 if (-not (Test-Path $configPath)) {
     $defaultConfig = @{
-        GitHubAccount  = "在此输入您的GitHub账号"  # 修改为您的GitHub账号
-        SearchEngine   = "https://www.bing.com/search?q={0}"
-        CustomSites    = [ordered]@{
-            "GitHub"    = "https://github.com"
-            "微软文档"  = "https://learn.microsoft.com"
-        }
-        KeywordMatches = @{
-            "公司产品"  = "https://www.yourproduct.com"
-            "内部系统"  = "https://intranet.example.com"
-        }
+        DefaultEngine = "https://www.bing.com/search?q={0}"
+        HomePage = "https://www.microsoft.com"
+        MaxHistory = 100
+        UserAgent = "Mozilla/5.0 (Windows NT; $browserName/$version)"
+        GeoCheck = $true
+        ShowImages = $false
+        EnableJavaScript = $false
     }
     $defaultConfig | Export-Clixml -Path $configPath
-    Write-Host "配置文件已创建: $configPath" -ForegroundColor Green
+}
+
+# 初始化书签
+if (-not (Test-Path $bookmarksPath)) {
+    $defaultBookmarks = [ordered]@{
+        "PowerShell 文档" = "https://learn.microsoft.com/powershell"
+        "GitHub" = "https://github.com"
+        "微软新闻" = "https://www.microsoft.com"
+        "Bing 搜索" = "https://www.bing.com"
+        "技术博客" = "https://devblogs.microsoft.com"
+        "PSGallery" = "https://www.powershellgallery.com"
+    }
+    $defaultBookmarks | Export-Clixml -Path $bookmarksPath
+}
+
+# 初始化历史记录
+if (-not (Test-Path $historyPath)) {
+    @() | Export-Clixml -Path $historyPath
 }
 
 # 加载配置
 $config = Import-Clixml -Path $configPath
+$bookmarks = Import-Clixml -Path $bookmarksPath
+$history = Import-Clixml -Path $historyPath
 
-function Show-MainMenu {
-    Clear-Host
-    Write-Host "`n=== PowerShell 增强浏览器 ===" -ForegroundColor Cyan
-    Write-Host "GitHub账号: $($config.GitHubAccount)"
-    Write-Host "1. 网络搜索"
-    Write-Host "2. 访问专属网站"
-    Write-Host "3. 管理专属网站"
-    Write-Host "4. 管理关键词匹配"
-    Write-Host "5. 设置GitHub账号"
-    Write-Host "6. 退出"
-    Write-Host "`n当前设置:"
-    Write-Host "  - 搜索引擎: $($config.SearchEngine.Split('?')[0])"
-    Write-Host "  - 专属网站: $($config.CustomSites.Count) 个"
-    Write-Host "  - 快捷关键词: $($config.KeywordMatches.Count) 个"
-    Write-Host "`n================================="
-}
-
-function Update-GitHubAccount {
-    param([string]$newAccount)
-    $config.GitHubAccount = $newAccount
-    $config | Export-Clixml -Path $configPath
-    Write-Host "GitHub账号已更新为: $newAccount" -ForegroundColor Green
-}
-
-function Invoke-WebSearch {
-    param([string]$query)
-    
-    # 检查关键词匹配
-    foreach ($keyword in $config.KeywordMatches.Keys) {
-        if ($query -match "\b$([regex]::Escape($keyword))\b") {
-            $matchUrl = $config.KeywordMatches[$keyword]
-            Write-Host "`n[关键词匹配] 检测到 '$keyword' 将跳转到专属网站" -ForegroundColor Green
-            return $matchUrl
+# 当前会话状态
+$session = @{
+    CurrentUrl = $config.HomePage
+    Tabs = @(
+        [PSCustomObject]@{
+            Id = 1
+            Title = "新标签页"
+            Url = $config.HomePage
+            History = @()
+            HistoryIndex = -1
         }
+    )
+    ActiveTab = 0
+    CurrentContent = ""
+    SearchMode = $false
+    SearchTerm = ""
+    SearchIndex = 0
+    Status = "就绪"
+}
+
+# 显示启动界面
+function Show-SplashScreen {
+    Clear-Host
+    Write-Host ""
+    Write-Host "           _____                _____                    _____                    _____                    _____                  " -ForegroundColor Cyan
+    Write-Host "          /\    \              /\    \                  /\    \                  /\    \                  /\    \                 " -ForegroundColor Cyan
+    Write-Host "         /::\    \            /::\    \                /::\    \                /::\    \                /::\____\               " -ForegroundColor Cyan
+    Write-Host "        /::::\    \           \:::\    \              /::::\    \              /::::\    \              /::::|   |              " -ForegroundColor Cyan
+    Write-Host "       /::::::\    \           \:::\    \            /::::::\    \            /::::::\    \            /:::::|   |              " -ForegroundColor Cyan
+    Write-Host "      /:::/\:::\    \           \:::\    \          /:::/\:::\    \          /:::/\:::\    \          /::::::|   |              " -ForegroundColor Cyan
+    Write-Host "     /:::/__\:::\    \           \:::\    \        /:::/__\:::\    \        /:::/__\:::\    \        /:::/|::|   |              " -ForegroundColor Cyan
+    Write-Host "     \:::\   \:::\    \          /::::\    \      /::::\   \:::\    \      /::::\   \:::\    \      /:::/ |::|   |              " -ForegroundColor Cyan
+    Write-Host "   ___\:::\   \:::\    \        /::::::\    \    /::::::\   \:::\    \    /::::::\   \:::\    \    /:::/  |::|   | _____        " -ForegroundColor Cyan
+    Write-Host "  /\   \:::\   \:::\    \      /:::/\:::\    \  /:::/\:::\   \:::\____\  /:::/\:::\   \:::\    \  /:::/   |::|   |/\    \       " -ForegroundColor Cyan
+    Write-Host " /::\   \:::\   \:::\____\    /:::/  \:::\____\/:::/  \:::\   \:::|    |/:::/__\:::\   \:::\____\/:: /    |::|   /::\____\      " -ForegroundColor Cyan
+    Write-Host " \:::\   \:::\   \::/    /   /:::/    \::/    /\::/    \:::\  /:::|____|\:::\   \:::\   \::/    /\::/    /|::|  /:::/    /      " -ForegroundColor Cyan
+    Write-Host "  \:::\   \:::\   \/____/   /:::/    / \/____/  \/_____/\:::\/:::/    /  \:::\   \:::\   \/____/  \/____/ |::| /:::/    /       " -ForegroundColor Cyan
+    Write-Host "   \:::\   \:::\    \      /:::/    /                    \::::::/    /    \:::\   \:::\    \               |::|/:::/    /        " -ForegroundColor Cyan
+    Write-Host "    \:::\   \:::\____\    /:::/    /                      \::::/    /      \:::\   \:::\____\              |::::::/    /         " -ForegroundColor Cyan
+    Write-Host "     \:::\  /:::/    /    \::/    /                       /:::/    /        \:::\   \::/    /              |:::::/    /          " -ForegroundColor Cyan
+    Write-Host "      \:::\/:::/    /      \/____/                       /:::/    /          \:::\   \/____/               |::::/    /           " -ForegroundColor Cyan
+    Write-Host "       \::::::/    /                                    /:::/    /            \:::\    \                   /:::/    /            " -ForegroundColor Cyan
+    Write-Host "        \::::/    /                                    /:::/    /              \:::\____\                 /:::/    /             " -ForegroundColor Cyan
+    Write-Host "         \::/    /                                     \::/    /                \::/    /                 \::/    /              " -ForegroundColor Cyan
+    Write-Host "          \/____/                                       \/____/                  \/____/                   \/____/               " -ForegroundColor Cyan
+    
+    Write-Host "`n`n                             $browserName v$version - PowerShell 控制台浏览器" -ForegroundColor Yellow
+    Write-Host "                             " -NoNewline
+    Write-Host "https://github.com/yourusername/powershell-browser" -ForegroundColor Cyan
+    
+    # 模拟初始化过程
+    $steps = @(
+        "正在初始化浏览器引擎...",
+        "加载配置文件...",
+        "解析用户代理设置...",
+        "初始化渲染引擎...",
+        "建立安全连接...",
+        "准备用户界面组件...",
+        "加载书签和历史记录...",
+        "准备就绪!"
+    )
+    
+    foreach ($step in $steps) {
+        Write-Host "`n[$(Get-Date -Format 'HH:mm:ss')] " -NoNewline -ForegroundColor DarkGray
+        Write-Host $step -ForegroundColor White
+        Start-Sleep -Milliseconds (Get-Random -Minimum 200 -Maximum 800)
     }
     
-    # 构建搜索URL
-    $searchUrl = $config.SearchEngine -f [Uri]::EscapeDataString($query)
+    Write-Host "`n按任意键继续..." -ForegroundColor DarkGray
+    [Console]::ReadKey($true) | Out-Null
+}
+
+# 添加历史记录
+function Add-HistoryRecord {
+    param([string]$url, [string]$title)
     
-    # 获取搜索结果
+    # 检查是否重复
+    $lastRecord = $history | Select-Object -Last 1
+    if ($lastRecord -and $lastRecord.Url -eq $url) { return }
+    
+    # 添加新记录
+    $newRecord = [PSCustomObject]@{
+        Url = $url
+        Title = $title
+        Timestamp = Get-Date
+    }
+    
+    $history += $newRecord
+    
+    # 限制历史记录数量
+    if ($history.Count -gt $config.MaxHistory) {
+        $history = $history | Select-Object -Last $config.MaxHistory
+    }
+    
+    $history | Export-Clixml -Path $historyPath
+}
+
+# 显示帮助信息
+function Show-Help {
+    Clear-Host
+    Write-Host "`n=== PowerShell 浏览器帮助 ===" -ForegroundColor Cyan
+    Write-Host "导航命令:"
+    Write-Host "  G [URL]      - 转到指定URL"
+    Write-Host "  B            - 后退"
+    Write-Host "  F            - 前进"
+    Write-Host "  R            - 刷新"
+    Write-Host "  H            - 主页"
+    Write-Host "  S [内容]     - 搜索"
+    
+    Write-Host "`n标签管理:"
+    Write-Host "  T            - 新建标签页"
+    Write-Host "  Ctrl+数字    - 切换到指定标签"
+    Write-Host "  Ctrl+W       - 关闭当前标签"
+    
+    Write-Host "`n书签管理:"
+    Write-Host "  A            - 添加书签"
+    Write-Host "  D            - 删除书签"
+    Write-Host "  L            - 列出书签"
+    
+    Write-Host "`n内容操作:"
+    Write-Host "  / [文本]     - 页面内搜索"
+    Write-Host "  N            - 查找下一个"
+    Write-Host "  P            - 查找上一个"
+    
+    Write-Host "`n其他命令:"
+    Write-Host "  I            - 显示页面信息"
+    Write-Host "  C            - 清除屏幕"
+    Write-Host "  Q            - 退出"
+    Write-Host "  ?            - 显示帮助"
+    
+    Write-Host "`n================================="
+    Write-Host "按任意键返回..."
+    [Console]::ReadKey($true) | Out-Null
+}
+
+# 获取网页内容
+function Get-WebContent {
+    param([string]$url)
+    
+    $session.Status = "正在连接: $url"
+    Update-UI
+    
+    # 验证URL格式
+    if (-not $url.StartsWith("http")) {
+        $url = "https://" + $url
+    }
+    
     try {
-        $response = Invoke-WebRequest -Uri $searchUrl -UserAgent "Mozilla/5.0" -UseBasicParsing -ErrorAction Stop
+        # 获取网页内容
+        $response = Invoke-WebRequest -Uri $url -UserAgent $config.UserAgent -UseBasicParsing -ErrorAction Stop
         
-        # 提取搜索结果链接
-        $links = $response.Links | 
-            Where-Object { $_.href -and $_.href -match '^https?://' -and $_.href -notmatch '(bing\.com|google\.com)' } |
-            ForEach-Object {
-                $url = if ($_.href -match '^/') {
-                    $uri = [Uri]$searchUrl
-                    "$($uri.Scheme)://$($uri.Host)$($_.href)"
-                } else {
-                    $_.href
-                }
-                $url
-            } |
-            Select-Object -Unique |
-            Select-Object -First 10
-        
-        if (-not $links) {
-            Write-Host "`n未找到搜索结果，请尝试其他关键词" -ForegroundColor Red
-            return $null
+        # 提取标题
+        $title = if ($response.ParsedHtml -and $response.ParsedHtml.title) {
+            $response.ParsedHtml.title
+        } else {
+            $url
         }
         
-        Write-Host "`n=== 搜索结果 ===" -ForegroundColor Yellow
-        for ($i = 0; $i -lt $links.Count; $i++) {
-            Write-Host "$($i+1). $($links[$i])"
-        }
-        Write-Host "`n0. 返回主菜单"
+        # 提取文本内容
+        $textContent = $response.Content -replace '<script.*?</script>' -replace '<style.*?</style>' -replace '<[^>]+>' -replace '\s+', ' '
+        $textContent = [System.Web.HttpUtility]::HtmlDecode($textContent)
+        $textContent = $textContent.Trim()
         
-        # 用户选择
-        $choice = Read-Host "`n请选择要访问的链接 (1-$($links.Count))"
-        if ($choice -eq 0) { return $null }
-        if ($choice -ge 1 -and $choice -le $links.Count) {
-            return $links[$choice-1]
-        }
+        # 添加到历史记录
+        Add-HistoryRecord -url $url -title $title
         
-        Write-Host "无效选择" -ForegroundColor Red
-        return $null
+        # 更新标签信息
+        $session.Tabs[$session.ActiveTab].Url = $url
+        $session.Tabs[$session.ActiveTab].Title = $title
+        $session.Tabs[$session.ActiveTab].History += $url
+        $session.Tabs[$session.ActiveTab].HistoryIndex = $session.Tabs[$session.ActiveTab].History.Count - 1
+        
+        $session.Status = "已加载: $title"
+        
+        return [PSCustomObject]@{
+            Url = $url
+            Title = $title
+            Content = $textContent
+            RawContent = $response.Content
+            StatusCode = $response.StatusCode
+            Headers = $response.Headers
+        }
     }
     catch {
-        Write-Host "`n搜索失败: $($_.Exception.Message)" -ForegroundColor Red
-        return $null
+        $session.Status = "错误: $($_.Exception.Message)"
+        return [PSCustomObject]@{
+            Url = $url
+            Title = "错误: $($_.Exception.Message)"
+            Content = "无法访问网站: $url`n错误信息: $($_.Exception.Message)"
+            RawContent = ""
+            StatusCode = 0
+            Headers = @{}
+        }
     }
 }
 
-function Show-WebsiteContent {
-    param([string]$url)
+# 显示页面信息
+function Show-PageInfo {
+    param([object]$page)
+    
+    Clear-Host
+    Write-Host "`n=== 页面信息 ===" -ForegroundColor Cyan
+    Write-Host "标题: $($page.Title)"
+    Write-Host "URL: $($page.Url)"
+    Write-Host "状态码: $($page.StatusCode)"
     
     # 检测服务器位置
     try {
-        $domain = ([Uri]$url).Host
+        $domain = ([Uri]$page.Url).Host
         $ip = [System.Net.Dns]::GetHostAddresses($domain)[0].IPAddressToString
         
         # 使用IPAPI检测国家
         $geoResponse = Invoke-RestMethod -Uri "http://ip-api.com/json/$ip" -ErrorAction SilentlyContinue
         if ($geoResponse.status -eq "success") {
-            Write-Host "`n服务器位置: $($geoResponse.country) ($($geoResponse.countryCode))" -ForegroundColor Cyan
+            Write-Host "服务器位置: $($geoResponse.country) ($($geoResponse.countryCode))" -ForegroundColor Cyan
+            Write-Host "ISP: $($geoResponse.isp)" -ForegroundColor DarkCyan
+            Write-Host "组织: $($geoResponse.org)" -ForegroundColor DarkCyan
             if ($geoResponse.countryCode -ne "CN") {
-                Write-Host "警告: 此服务器位于境外!" -ForegroundColor Red -BackgroundColor Black
-                Write-Host "按任意键继续访问，或按ESC取消"
-                $key = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-                if ($key.VirtualKeyCode -eq 27) { return }
+                Write-Host "`n警告: 此服务器位于境外!" -ForegroundColor Red -BackgroundColor Black
             }
         }
     }
     catch {
-        Write-Host "`n地理位置检测失败: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "地理位置检测失败: $($_.Exception.Message)" -ForegroundColor Yellow
     }
     
-    # 获取网站内容
-    try {
-        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -ErrorAction Stop
-        
-        # 显示纯文本内容
-        Clear-Host
-        Write-Host "`n=== 网站内容 ($url) ===" -ForegroundColor Green
-        Write-Host $response.Content.Substring(0, [Math]::Min(2000, $response.Content.Length))
-        Write-Host "`n(内容已截断，仅显示部分文本)"
-        
-        # 返回HTML源码路径
-        $htmlPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "webcontent_$(Get-Date -Format 'yyyyMMddHHmmss').html")
-        $response.Content | Out-File -FilePath $htmlPath
-        Write-Host "`n完整HTML源码已保存到: $htmlPath" -ForegroundColor Cyan
+    Write-Host "`n响应头:"
+    $page.Headers.GetEnumerator() | ForEach-Object {
+        Write-Host "  $($_.Key): $($_.Value)" -ForegroundColor DarkGray
     }
-    catch {
-        Write-Host "`n访问失败: $($_.Exception.Message)" -ForegroundColor Red
-    }
+    
+    Write-Host "`n================================="
+    Write-Host "按任意键返回..."
+    [Console]::ReadKey($true) | Out-Null
 }
 
-function Manage-CustomSites {
+# 渲染页面内容
+function Render-Page {
+    param([object]$page)
+    
     Clear-Host
-    Write-Host "`n=== 专属网站管理 ===" -ForegroundColor Cyan
-    Write-Host "当前专属网站:"
-    $index = 1
-    foreach ($site in $config.CustomSites.GetEnumerator()) {
-        Write-Host "$index. $($site.Key) - $($site.Value)"
-        $index++
-    }
+    $activeTab = $session.Tabs[$session.ActiveTab]
     
-    Write-Host "`n操作选项:"
-    Write-Host "A. 添加网站"
-    Write-Host "D. 删除网站"
-    Write-Host "B. 返回主菜单"
+    # 显示标题栏
+    Write-Host "`n$('=' * ($Host.UI.RawUI.WindowSize.Width - 2))" -ForegroundColor DarkGray
+    Write-Host "$browserName v$version" -NoNewline -ForegroundColor Cyan
+    Write-Host " | 标签: " -NoNewline -ForegroundColor DarkGray
+    Write-Host "$($session.ActiveTab+1)/$($session.Tabs.Count)" -NoNewline -ForegroundColor Yellow
+    Write-Host " | " -NoNewline -ForegroundColor DarkGray
+    Write-Host $activeTab.Title -ForegroundColor White
+    Write-Host "URL: " -NoNewline -ForegroundColor DarkGray
+    Write-Host $activeTab.Url -ForegroundColor Cyan
+    Write-Host "$('=' * ($Host.UI.RawUI.WindowSize.Width - 2))`n" -ForegroundColor DarkGray
     
-    $choice = Read-Host "`n请选择操作"
-    switch -Regex ($choice.ToUpper()) {
-        'A' {
-            $name = Read-Host "`n输入网站名称"
-            $url = Read-Host "输入网站URL"
-            if ($url -notmatch '^https?://') {
-                $url = "http://" + $url
-            }
-            $config.CustomSites[$name] = $url
-            $config | Export-Clixml -Path $configPath
-            Write-Host "网站已添加!" -ForegroundColor Green
-        }
-        'D' {
-            $num = Read-Host "输入要删除的网站编号"
-            if ($num -match '^\d+$' -and [int]$num -ge 1 -and [int]$num -le $config.CustomSites.Count) {
-                $key = $config.CustomSites.Keys[[int]$num - 1]
-                $config.CustomSites.Remove($key)
-                $config | Export-Clixml -Path $configPath
-                Write-Host "网站已删除!" -ForegroundColor Green
+    # 显示内容
+    if (-not [string]::IsNullOrWhiteSpace($page.Content)) {
+        # 计算可显示的行数（减去页眉和页脚）
+        $maxLines = $Host.UI.RawUI.WindowSize.Height - 8
+        
+        # 分割内容为行
+        $lines = $page.Content -split "`n" | Where-Object { $_ -match '\S' }
+        
+        # 显示内容
+        for ($i = 0; $i -lt [Math]::Min($maxLines, $lines.Count); $i++) {
+            # 高亮搜索词
+            if ($session.SearchMode -and $session.SearchTerm -and $lines[$i] -match $session.SearchTerm) {
+                $line = $lines[$i] -replace "($($session.SearchTerm))", "`e[33m`$1`e[0m"
+                Write-Host $line
             }
             else {
-                Write-Host "无效编号" -ForegroundColor Red
+                Write-Host $lines[$i] -ForegroundColor Gray
             }
         }
+        
+        # 显示截断消息
+        if ($lines.Count -gt $maxLines) {
+            Write-Host "`n(内容已截断，仅显示前 $maxLines 行)" -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "`n`n`n                 没有可显示的内容" -ForegroundColor DarkGray
+        Write-Host "                 尝试访问其他网站" -ForegroundColor DarkGray
+    }
+    
+    # 显示页脚信息
+    $searchInfo = if ($session.SearchMode) { "[搜索模式: '$($session.SearchTerm)']" } else { "" }
+    Write-Host "`n$('=' * ($Host.UI.RawUI.WindowSize.Width - 2))" -ForegroundColor DarkGray
+    Write-Host "导航: G <URL> | 搜索: S <内容> | 书签: L | 标签: T | 帮助: ? | 退出: Q $searchInfo" -ForegroundColor DarkCyan
+    Write-Host "状态: $($session.Status)" -ForegroundColor DarkGray
+    Write-Host "$('=' * ($Host.UI.RawUI.WindowSize.Width - 2))" -ForegroundColor DarkGray
+}
+
+# 添加书签
+function Add-Bookmark {
+    param([string]$url, [string]$title)
+    
+    if (-not $bookmarks.ContainsValue($url)) {
+        # 生成默认名称
+        if ([string]::IsNullOrWhiteSpace($title)) {
+            $title = "书签 $($bookmarks.Count + 1)"
+        }
+        
+        $bookmarks[$title] = $url
+        $bookmarks | Export-Clixml -Path $bookmarksPath
+        $session.Status = "已添加书签: $title"
+    }
+    else {
+        $session.Status = "此书签已存在"
     }
 }
 
-function Manage-KeywordMatches {
+# 列出书签
+function List-Bookmarks {
     Clear-Host
-    Write-Host "`n=== 关键词管理 ===" -ForegroundColor Cyan
-    Write-Host "当前关键词匹配:"
-    $index = 1
-    foreach ($kw in $config.KeywordMatches.GetEnumerator()) {
-        Write-Host "$index. $($kw.Key) -> $($kw.Value)"
-        $index++
+    Write-Host "`n=== 书签管理器 ===" -ForegroundColor Cyan
+    
+    if ($bookmarks.Count -eq 0) {
+        Write-Host "没有书签" -ForegroundColor Yellow
+    }
+    else {
+        $index = 1
+        $bookmarks.GetEnumerator() | ForEach-Object {
+            Write-Host "$index. $($_.Key)" -ForegroundColor Yellow
+            Write-Host "   $($_.Value)" -ForegroundColor DarkGray
+            $index++
+        }
     }
     
-    Write-Host "`n操作选项:"
-    Write-Host "A. 添加关键词"
-    Write-Host "D. 删除关键词"
-    Write-Host "B. 返回主菜单"
+    Write-Host "`n操作:"
+    Write-Host "  [编号] - 打开书签"
+    Write-Host "  A <名称> - 添加书签"
+    Write-Host "  D <编号> - 删除书签"
+    Write-Host "  E <编号> - 编辑书签"
+    Write-Host "  B - 返回"
     
-    $choice = Read-Host "`n请选择操作"
-    switch -Regex ($choice.ToUpper()) {
-        'A' {
-            $keyword = Read-Host "`n输入关键词"
-            $url = Read-Host "输入匹配的URL"
-            if ($url -notmatch '^https?://') {
-                $url = "http://" + $url
-            }
-            $config.KeywordMatches[$keyword] = $url
-            $config | Export-Clixml -Path $configPath
-            Write-Host "关键词已添加!" -ForegroundColor Green
+    $action = Read-Host "`n请选择操作"
+    
+    if ($action -eq 'B') {
+        return
+    }
+    elseif ($action -eq 'A') {
+        $name = Read-Host "输入书签名称"
+        $url = $session.Tabs[$session.ActiveTab].Url
+        Add-Bookmark -url $url -title $name
+    }
+    elseif ($action -match '^D\s?(\d+)$') {
+        $index = [int]$Matches[1] - 1
+        if ($index -ge 0 -and $index -lt $bookmarks.Count) {
+            $key = $bookmarks.Keys[$index]
+            $bookmarks.Remove($key)
+            $bookmarks | Export-Clixml -Path $bookmarksPath
+            $session.Status = "已删除书签: $key"
         }
-        'D' {
-            $num = Read-Host "输入要删除的关键词编号"
-            if ($num -match '^\d+$' -and [int]$num -ge 1 -and [int]$num -le $config.KeywordMatches.Count) {
-                $key = $config.KeywordMatches.Keys[[int]$num - 1]
-                $config.KeywordMatches.Remove($key)
-                $config | Export-Clixml -Path $configPath
-                Write-Host "关键词已删除!" -ForegroundColor Green
+    }
+    elseif ($action -match '^E\s?(\d+)$') {
+        $index = [int]$Matches[1] - 1
+        if ($index -ge 0 -and $index -lt $bookmarks.Count) {
+            $key = $bookmarks.Keys[$index]
+            $newName = Read-Host "新名称 (当前: $key)"
+            $newUrl = Read-Host "新URL (当前: $($bookmarks[$key]))"
+            
+            if (-not [string]::IsNullOrWhiteSpace($newName)) {
+                $bookmarks.Remove($key)
+                $bookmarks[$newName] = if ([string]::IsNullOrWhiteSpace($newUrl)) { $bookmarks[$key] } else { $newUrl }
+                $bookmarks | Export-Clixml -Path $bookmarksPath
+                $session.Status = "书签已更新"
             }
-            else {
-                Write-Host "无效编号" -ForegroundColor Red
-            }
+        }
+    }
+    elseif ($action -match '^\d+$') {
+        $index = [int]$action - 1
+        if ($index -ge 0 -and $index -lt $bookmarks.Count) {
+            $url = $bookmarks.Values[$index]
+            $page = Get-WebContent -url $url
+            Render-Page -page $page
         }
     }
 }
 
-# 主程序循环
-while ($true) {
-    Show-MainMenu
-    $choice = Read-Host "`n请选择操作"
+# 更新用户界面
+function Update-UI {
+    $activeTab = $session.Tabs[$session.ActiveTab]
+    if ($activeTab.Url) {
+        $page = Get-WebContent -url $activeTab.Url
+        Render-Page -page $page
+    }
+}
+
+# 主程序
+function Start-Browser {
+    # 显示启动界面
+    Show-SplashScreen
     
-    switch ($choice) {
-        '1' {
-            $query = Read-Host "`n输入搜索内容"
-            if (-not [string]::IsNullOrWhiteSpace($query)) {
-                $url = Invoke-WebSearch -query $query
-                if ($url) {
-                    Show-WebsiteContent -url $url
+    # 初始加载主页
+    $page = Get-WebContent -url $session.Tabs[0].Url
+    Render-Page -page $page
+    
+    # 主循环
+    while ($true) {
+        # 显示命令提示
+        Write-Host "`n命令: " -NoNewline -ForegroundColor Yellow
+        $command = Read-Host
+        
+        if ([string]::IsNullOrWhiteSpace($command)) {
+            continue
+        }
+        
+        $command = $command.Trim()
+        
+        # 处理命令
+        switch -Regex ($command) {
+            '^g (.+)' {
+                $url = $Matches[1]
+                $page = Get-WebContent -url $url
+                Render-Page -page $page
+            }
+            '^s (.+)' {
+                $query = $Matches[1]
+                $searchUrl = $config.DefaultEngine -f [Uri]::EscapeDataString($query)
+                $page = Get-WebContent -url $searchUrl
+                Render-Page -page $page
+            }
+            '^b$' {
+                $activeTab = $session.Tabs[$session.ActiveTab]
+                if ($activeTab.HistoryIndex -gt 0) {
+                    $activeTab.HistoryIndex--
+                    $page = Get-WebContent -url $activeTab.History[$activeTab.HistoryIndex]
+                    Render-Page -page $page
                 }
             }
-            pause
-        }
-        '2' {
-            Clear-Host
-            Write-Host "`n=== 专属网站列表 ===" -ForegroundColor Cyan
-            $index = 1
-            $urls = @()
-            foreach ($site in $config.CustomSites.Values) {
-                Write-Host "$index. $site"
-                $urls += $site
-                $index++
+            '^f$' {
+                $activeTab = $session.Tabs[$session.ActiveTab]
+                if ($activeTab.HistoryIndex -lt ($activeTab.History.Count - 1)) {
+                    $activeTab.HistoryIndex++
+                    $page = Get-WebContent -url $activeTab.History[$activeTab.HistoryIndex]
+                    Render-Page -page $page
+                }
             }
-            Write-Host "`n0. 返回主菜单"
-            
-            $choice = Read-Host "`n请选择要访问的网站"
-            if ($choice -ne '0') {
-                if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $urls.Count) {
-                    Show-WebsiteContent -url $urls[[int]$choice - 1]
+            '^r$' {
+                $activeTab = $session.Tabs[$session.ActiveTab]
+                $page = Get-WebContent -url $activeTab.Url
+                Render-Page -page $page
+            }
+            '^h$' {
+                $page = Get-WebContent -url $config.HomePage
+                Render-Page -page $page
+            }
+            '^t$' {
+                $newTab = [PSCustomObject]@{
+                    Id = ($session.Tabs | Measure-Object -Property Id -Maximum).Maximum + 1
+                    Title = "新标签页"
+                    Url = $config.HomePage
+                    History = @()
+                    HistoryIndex = -1
+                }
+                $session.Tabs += $newTab
+                $session.ActiveTab = $session.Tabs.Count - 1
+                $page = Get-WebContent -url $config.HomePage
+                Render-Page -page $page
+            }
+            '^a$' {
+                $name = Read-Host "输入书签名称"
+                $url = $session.Tabs[$session.ActiveTab].Url
+                Add-Bookmark -url $url -title $name
+                Render-Page -page $page
+            }
+            '^d$' {
+                $session.Status = "书签删除功能 - 使用 'L' 命令进入书签管理器删除"
+                Render-Page -page $page
+            }
+            '^l$' {
+                List-Bookmarks
+            }
+            '^i$' {
+                $activeTab = $session.Tabs[$session.ActiveTab]
+                $page = Get-WebContent -url $activeTab.Url
+                Show-PageInfo -page $page
+                Render-Page -page $page
+            }
+            '^\?$' {
+                Show-Help
+                Render-Page -page $page
+            }
+            '^q$' {
+                exit
+            }
+            '^/(.+)' {
+                $session.SearchTerm = $Matches[1]
+                $session.SearchMode = $true
+                $session.SearchIndex = 0
+                $session.Status = "搜索模式: $($session.SearchTerm)"
+                Render-Page -page $page
+            }
+            '^n$' {
+                if ($session.SearchMode) {
+                    $session.SearchIndex++
+                    $session.Status = "查找下一个匹配项"
+                    Render-Page -page $page
+                }
+            }
+            '^p$' {
+                if ($session.SearchMode) {
+                    $session.SearchIndex--
+                    $session.Status = "查找上一个匹配项"
+                    Render-Page -page $page
+                }
+            }
+            default {
+                if ($command -match '^\d+$') {
+                    $index = [int]$command - 1
+                    if ($index -lt $bookmarks.Count) {
+                        $url = $bookmarks.Values[$index]
+                        $page = Get-WebContent -url $url
+                        Render-Page -page $page
+                    }
                 }
                 else {
-                    Write-Host "无效选择" -ForegroundColor Red
+                    $session.Status = "未知命令: $command (输入 ? 查看帮助)"
+                    Render-Page -page $page
                 }
             }
-            pause
         }
-        '3' { 
-            Manage-CustomSites
-            pause 
-        }
-        '4' { 
-            Manage-KeywordMatches
-            pause 
-        }
-        '5' {
-            $newAccount = Read-Host "`n输入您的GitHub账号"
-            if (-not [string]::IsNullOrWhiteSpace($newAccount)) {
-                Update-GitHubAccount -newAccount $newAccount
-            }
-            pause
-        }
-        '6' { exit }
-        default { Write-Host "无效选择" -ForegroundColor Red; pause }
     }
 }
+
+# 启动浏览器
+Start-Browser
